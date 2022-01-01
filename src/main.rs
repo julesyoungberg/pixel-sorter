@@ -3,6 +3,8 @@ use glsl_layout::*;
 use nannou::prelude::*;
 
 struct Model {
+    width: u32,
+    height: u32,
     app_texture: wgpu::Texture,
     uniform_texture: wgpu::Texture,
     renderer: nannou::draw::Renderer,
@@ -41,27 +43,49 @@ const VERTICES: [Vertex; 4] = [
 #[derive(Debug, Default, Clone, Copy, Uniform)]
 pub struct Uniforms {
     iteration: uint,
+    width: float,
+    height: float,
 }
-
-const WIDTH: u32 = 960;
-const HEIGHT: u32 = 540;
 
 fn main() {
     nannou::app(model).update(update).run();
 }
 
 fn model(app: &App) -> Model {
+    // Load the image.
+    let image_path = app
+        .assets_path()
+        .unwrap()
+        .join("images")
+        .join("vqgan_graffiti.png");
+    let image = image::open(logo_path).unwrap();
+    let (width, height) = image.dimensions();
+
     let window_id = app
         .new_window()
-        .size(WIDTH, HEIGHT)
+        .size(width, height)
         .view(view)
         .build()
         .unwrap();
     let window = app.window(window_id).unwrap();
     let device = window.swap_chain_device();
+    let sample_count = window.msaa_samples();
+
+    // Create the compute shader module.
+    println!("loading shaders");
+    let vs_mod = wgpu::shader_from_spirv_bytes(device, include_bytes!("shaders/vert.spv"));
+    let fs_mod = wgpu::shader_from_spirv_bytes(device, include_bytes!("shaders/frag.spv"));
+
+    println!("creating uniform texture");
+    let uniform_texture = wgpu::Texture::from_image(&window, &image);
+    let uniform_texture_view = uniform_texture.view().build();
+
+    // Create the sampler for sampling from the source texture.
+    println!("creating sampler");
+    let sampler = wgpu::SamplerBuilder::new().build(device);
 
     // create uniform buffer
-    let uniforms = create_uniforms(0);
+    let uniforms = create_uniforms(width, height, 0);
     println!("uniforms: {:?}", uniforms);
     let uniforms_bytes = uniforms_as_bytes(&uniforms);
     let uniform_buffer = device.create_buffer_with_data(
@@ -69,25 +93,10 @@ fn model(app: &App) -> Model {
         wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
     );
 
-    // Create the compute shader module.
-    println!("loading shaders");
-    let vs_mod = wgpu::shader_from_spirv_bytes(device, include_bytes!("shaders/vert.spv"));
-    let fs_mod = wgpu::shader_from_spirv_bytes(device, include_bytes!("shaders/frag.spv"));
-
     // create our custom texture for rendering
     println!("creating app texure and reshaper");
-    let sample_count = window.msaa_samples();
-    let size = pt2(WIDTH as f32, HEIGHT as f32);
-    let app_texture = create_app_texture(&device, size, sample_count);
+    let app_texture = create_app_texture(&device, width, height, sample_count);
     let texture_reshaper = create_texture_reshaper(&device, &app_texture, sample_count);
-
-    println!("creating uniform texture");
-    let uniform_texture = create_uniform_texture(&device, size, sample_count);
-    let uniform_texture_view = uniform_texture.view().build();
-
-    // Create the sampler for sampling from the source texture.
-    println!("creating sampler");
-    let sampler = wgpu::SamplerBuilder::new().build(device);
 
     println!("creating bind group layout");
     let bind_group_layout = create_bind_group_layout(device, uniform_texture_view.component_type());
@@ -110,6 +119,8 @@ fn model(app: &App) -> Model {
     let vertex_buffer = device.create_buffer_with_data(vertices_bytes, wgpu::BufferUsage::VERTEX);
 
     Model {
+        width,
+        height,
         app_texture,
         uniform_texture,
         renderer,
@@ -129,7 +140,7 @@ fn update(app: &App, model: &mut Model, _update: Update) {
 
     // An update for the uniform buffer with the current time.
     let elapsed_frames = app.main_window().elapsed_frames();
-    let uniforms = create_uniforms(elapsed_frames % 2);
+    let uniforms = create_uniforms(width, height, elapsed_frames % 2);
     let uniforms_bytes = uniforms_as_bytes(&uniforms);
     let uniforms_size = uniforms_bytes.len();
     let new_uniform_buffer =
@@ -202,32 +213,32 @@ fn view(app: &App, model: &Model, frame: Frame) {
         .encode_render_pass(frame.texture_view(), &mut *encoder);
 }
 
-fn create_uniforms(iteration: u32) -> Uniforms {
-    Uniforms { iteration }
+fn create_uniforms(width: u32, height: u32, iteration: u32) -> Uniforms {
+    Uniforms {
+        width: width as f32,
+        height: height as f32,
+        iteration,
+    }
 }
 
 fn uniforms_as_bytes(uniforms: &Uniforms) -> &[u8] {
     unsafe { wgpu::bytes::from(uniforms) }
 }
 
-fn create_app_texture(device: &wgpu::Device, size: Point2, msaa_samples: u32) -> wgpu::Texture {
+fn create_app_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    msaa_samples: u32,
+) -> wgpu::Texture {
     wgpu::TextureBuilder::new()
-        .size([size[0] as u32, size[1] as u32])
+        .size([width, height])
         .usage(
             wgpu::TextureUsage::OUTPUT_ATTACHMENT
                 | wgpu::TextureUsage::SAMPLED
                 | wgpu::TextureUsage::COPY_SRC
                 | wgpu::TextureUsage::COPY_DST,
         )
-        .sample_count(msaa_samples)
-        .format(Frame::TEXTURE_FORMAT)
-        .build(device)
-}
-
-fn create_uniform_texture(device: &wgpu::Device, size: Point2, msaa_samples: u32) -> wgpu::Texture {
-    wgpu::TextureBuilder::new()
-        .size([size[0] as u32, size[1] as u32])
-        .usage(wgpu::TextureBuilder::REQUIRED_IMAGE_TEXTURE_USAGE | wgpu::TextureUsage::SAMPLED)
         .sample_count(msaa_samples)
         .format(Frame::TEXTURE_FORMAT)
         .build(device)

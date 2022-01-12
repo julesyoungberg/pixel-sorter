@@ -1,5 +1,7 @@
 use glsl_layout::float;
 use glsl_layout::*;
+use nannou::image;
+use nannou::image::GenericImageView;
 use nannou::prelude::*;
 
 struct Model {
@@ -53,12 +55,8 @@ fn main() {
 
 fn model(app: &App) -> Model {
     // Load the image.
-    let image_path = app
-        .assets_path()
-        .unwrap()
-        .join("images")
-        .join("vqgan_graffiti.png");
-    let image = image::open(logo_path).unwrap();
+    let image_path = app.assets_path().unwrap().join("vqgan_graffiti.png");
+    let image = image::open(image_path).unwrap();
     let (width, height) = image.dimensions();
 
     let window_id = app
@@ -118,6 +116,16 @@ fn model(app: &App) -> Model {
     let vertices_bytes = vertices_as_bytes(&VERTICES[..]);
     let vertex_buffer = device.create_buffer_with_data(vertices_bytes, wgpu::BufferUsage::VERTEX);
 
+    // Create our `Draw` instance and a renderer for it.
+    println!("creating renderer");
+    let descriptor = app_texture.descriptor();
+    let renderer =
+        nannou::draw::RendererBuilder::new().build_from_texture_descriptor(device, descriptor);
+
+    // Create the texture capturer.
+    println!("creating texture capturer");
+    let texture_capturer = wgpu::TextureCapturer::default();
+
     Model {
         width,
         height,
@@ -140,7 +148,7 @@ fn update(app: &App, model: &mut Model, _update: Update) {
 
     // An update for the uniform buffer with the current time.
     let elapsed_frames = app.main_window().elapsed_frames();
-    let uniforms = create_uniforms(width, height, elapsed_frames % 2);
+    let uniforms = create_uniforms(model.width, model.height, elapsed_frames as u32 % 2);
     let uniforms_bytes = uniforms_as_bytes(&uniforms);
     let uniforms_size = uniforms_bytes.len();
     let new_uniform_buffer =

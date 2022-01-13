@@ -75,7 +75,8 @@ fn model(app: &App) -> Model {
     let fs_mod = wgpu::shader_from_spirv_bytes(device, include_bytes!("shaders/frag.spv"));
 
     println!("creating uniform texture");
-    let uniform_texture = wgpu::Texture::from_image(&window, &image);
+    let image_texture = wgpu::Texture::from_image(&window, &image);
+    let uniform_texture = create_app_texture(&device, width, height, sample_count);
     let uniform_texture_view = uniform_texture.view().build();
 
     // Create the sampler for sampling from the source texture.
@@ -125,6 +126,24 @@ fn model(app: &App) -> Model {
     // Create the texture capturer.
     println!("creating texture capturer");
     let texture_capturer = wgpu::TextureCapturer::default();
+
+    println!("creating init texture reshaper");
+    let init_texture_reshaper = wgpu::TextureReshaper::new(
+        device,
+        &image_texture.view().build(),
+        1,
+        uniform_texture.component_type(),
+        sample_count,
+        Frame::TEXTURE_FORMAT,
+    );
+
+    // copy image texture into uniform texture
+    println!("copying image texture into uniform texture");
+    let ce_desc = wgpu::CommandEncoderDescriptor {
+        label: Some("texture-renderer"),
+    };
+    let mut encoder = device.create_command_encoder(&ce_desc);
+    init_texture_reshaper.encode_render_pass(&uniform_texture_view, &mut encoder);
 
     Model {
         width,

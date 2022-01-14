@@ -10,5 +10,12 @@ layout(set = 0, binding = 0) uniform Uniforms {
 };
 
 void main() {
-    f_color = vec4(0.0);
+    vec2 st = tex_coords;
+
+    int iteration_parity = int(iteration % 2);
+    int pixel_parity = int(floor(tex_coords.y * height)) % 2;
+
+    int a = (pixel_parity * 2 - 1) * (iteration_parity * 2 - 1);
+
+    f_color = vec4(0, a, 0, 1);
 }

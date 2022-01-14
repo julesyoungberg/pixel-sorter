@@ -10,7 +10,6 @@ struct Model {
     height: u32,
     uniform_texture: wgpu::Texture,
     texture_capturer: wgpu::TextureCapturer,
-    texture_reshaper: wgpu::TextureReshaper,
     field_generator: CustomRenderer,
     sorter: CustomRenderer,
     vertex_buffer: wgpu::Buffer,
@@ -97,6 +96,7 @@ fn model(app: &App) -> Model {
         Some(&uniform_buffer),
         width,
         height,
+        sample_count,
     );
 
     let sorter_uniform_textures = vec![&uniform_texture, &field_generator.output_texture];
@@ -110,12 +110,8 @@ fn model(app: &App) -> Model {
         Some(&uniform_buffer),
         width,
         height,
+        sample_count,
     );
-
-    // create our custom texture for rendering
-    println!("creating app texure and reshaper");
-    let texture_reshaper =
-        create_texture_reshaper(&device, &sorter.output_texture, 1, sample_count);
 
     println!("creating vertex buffer");
     let vertices_bytes = vertices_as_bytes(&VERTICES[..]);
@@ -142,7 +138,6 @@ fn model(app: &App) -> Model {
         height,
         uniform_texture,
         texture_capturer,
-        texture_reshaper,
         field_generator,
         sorter,
         vertex_buffer,
@@ -225,6 +220,8 @@ fn view(_app: &App, model: &Model, frame: Frame) {
     // Sample the texture and write it to the frame.
     let mut encoder = frame.command_encoder();
     model
+        // .field_generator
+        .sorter
         .texture_reshaper
         .encode_render_pass(frame.texture_view(), &mut *encoder);
 }
@@ -245,6 +242,7 @@ struct CustomRenderer {
     bind_group: wgpu::BindGroup,
     render_pipeline: wgpu::RenderPipeline,
     pub output_texture: wgpu::Texture,
+    pub texture_reshaper: wgpu::TextureReshaper,
 }
 
 /// A render pipeline generator for a fragment shader with optional textures, sampler, and uniform buffer
@@ -258,6 +256,7 @@ impl CustomRenderer {
         uniform_buffer: Option<&wgpu::Buffer>,
         width: u32,
         height: u32,
+        sample_count: u32,
     ) -> Self {
         println!("creating bind group");
 
@@ -316,10 +315,13 @@ impl CustomRenderer {
 
         let output_texture = create_app_texture(&device, width, height, 1);
 
+        let texture_reshaper = create_texture_reshaper(&device, &output_texture, 1, sample_count);
+
         Self {
             bind_group,
             render_pipeline,
             output_texture,
+            texture_reshaper,
         }
     }
 

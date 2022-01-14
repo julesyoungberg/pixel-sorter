@@ -8,13 +8,11 @@ use std::fs;
 struct Model {
     width: u32,
     height: u32,
-    app_texture: wgpu::Texture,
     uniform_texture: wgpu::Texture,
-    renderer: nannou::draw::Renderer,
     texture_capturer: wgpu::TextureCapturer,
     texture_reshaper: wgpu::TextureReshaper,
-    bind_group: wgpu::BindGroup,
-    render_pipeline: wgpu::RenderPipeline,
+    field_generator: CustomRenderer,
+    sorter: CustomRenderer,
     vertex_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
 }
@@ -73,14 +71,12 @@ fn model(app: &App) -> Model {
     // Create the compute shader module.
     println!("loading shaders");
     let vs_mod = compile_shader(app, &device, "shader.vert", shaderc::ShaderKind::Vertex);
-    let fs_mod = compile_shader(app, &device, "sort.frag", shaderc::ShaderKind::Fragment);
+    let field_fs_mod = compile_shader(app, &device, "field.frag", shaderc::ShaderKind::Fragment);
+    let sort_fs_mod = compile_shader(app, &device, "sort.frag", shaderc::ShaderKind::Fragment);
 
-    println!("creating uniform texture");
     let uniform_texture = create_app_texture(&device, width, height, 1);
-    let uniform_texture_view = uniform_texture.view().build();
 
     // Create the sampler for sampling from the source texture.
-    println!("creating sampler");
     let sampler = wgpu::SamplerBuilder::new().build(device);
 
     // create uniform buffer
@@ -92,35 +88,38 @@ fn model(app: &App) -> Model {
         wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
     );
 
+    let field_generator = CustomRenderer::new(
+        &device,
+        &vs_mod,
+        &field_fs_mod,
+        None,
+        None,
+        Some(&uniform_buffer),
+        width,
+        height,
+    );
+
+    let sorter_uniform_textures = vec![&uniform_texture, &field_generator.output_texture];
+
+    let sorter = CustomRenderer::new(
+        &device,
+        &vs_mod,
+        &sort_fs_mod,
+        Some(&sorter_uniform_textures),
+        Some(&sampler),
+        Some(&uniform_buffer),
+        width,
+        height,
+    );
+
     // create our custom texture for rendering
     println!("creating app texure and reshaper");
-    let app_texture = create_app_texture(&device, width, height, 1);
-    let texture_reshaper = create_texture_reshaper(&device, &app_texture, 1, sample_count);
-
-    println!("creating bind group layout");
-    let bind_group_layout = create_bind_group_layout(device, uniform_texture_view.component_type());
-    println!("creating bind group");
-    let bind_group = create_bind_group(
-        device,
-        &bind_group_layout,
-        &uniform_texture_view,
-        &sampler,
-        &uniform_buffer,
-    );
-    println!("creating pipeline layout");
-    let pipeline_layout = create_pipeline_layout(device, &bind_group_layout);
-    println!("creating render pipeline");
-    let render_pipeline = create_render_pipeline(device, &pipeline_layout, &vs_mod, &fs_mod, 1);
+    let texture_reshaper =
+        create_texture_reshaper(&device, &sorter.output_texture, 1, sample_count);
 
     println!("creating vertex buffer");
     let vertices_bytes = vertices_as_bytes(&VERTICES[..]);
     let vertex_buffer = device.create_buffer_with_data(vertices_bytes, wgpu::BufferUsage::VERTEX);
-
-    // Create our `Draw` instance and a renderer for it.
-    println!("creating renderer");
-    let descriptor = app_texture.descriptor();
-    let renderer =
-        nannou::draw::RendererBuilder::new().build_from_texture_descriptor(device, descriptor);
 
     // Create the texture capturer.
     println!("creating texture capturer");
@@ -141,13 +140,11 @@ fn model(app: &App) -> Model {
     Model {
         width,
         height,
-        app_texture,
         uniform_texture,
-        renderer,
         texture_capturer,
         texture_reshaper,
-        bind_group,
-        render_pipeline,
+        field_generator,
+        sorter,
         vertex_buffer,
         uniform_buffer,
     }
@@ -156,7 +153,6 @@ fn model(app: &App) -> Model {
 fn update(app: &App, model: &mut Model, _update: Update) {
     let window = app.main_window();
     let device = window.swap_chain_device();
-    let texture_view = model.app_texture.view().build();
 
     // An update for the uniform buffer with the current time.
     let elapsed_frames = app.main_window().elapsed_frames();
@@ -189,20 +185,18 @@ fn update(app: &App, model: &mut Model, _update: Update) {
         .texture_capturer
         .capture(device, &mut encoder, &model.uniform_texture);
 
-    {
-        let mut render_pass = wgpu::RenderPassBuilder::new()
-            .color_attachment(&texture_view, |color| color)
-            .begin(&mut encoder);
-        render_pass.set_bind_group(0, &model.bind_group, &[]);
-        render_pass.set_pipeline(&model.render_pipeline);
-        render_pass.set_vertex_buffer(0, &model.vertex_buffer, 0, 0);
-        let vertex_range = 0..VERTICES.len() as u32;
-        let instance_range = 0..1;
-        render_pass.draw(vertex_range, instance_range);
-    }
+    model
+        .field_generator
+        .render(&mut encoder, &model.vertex_buffer);
+
+    model.sorter.render(&mut encoder, &model.vertex_buffer);
 
     // copy app texture to uniform texture
-    copy_texture(&mut encoder, &model.app_texture, &model.uniform_texture);
+    copy_texture(
+        &mut encoder,
+        &model.sorter.output_texture,
+        &model.uniform_texture,
+    );
 
     // submit encoded command buffer
     window.swap_chain_queue().submit(&[encoder.finish()]);
@@ -247,6 +241,102 @@ fn uniforms_as_bytes(uniforms: &Uniforms) -> &[u8] {
     unsafe { wgpu::bytes::from(uniforms) }
 }
 
+struct CustomRenderer {
+    bind_group: wgpu::BindGroup,
+    render_pipeline: wgpu::RenderPipeline,
+    pub output_texture: wgpu::Texture,
+}
+
+/// A render pipeline generator for a fragment shader with optional textures, sampler, and uniform buffer
+impl CustomRenderer {
+    pub fn new(
+        device: &wgpu::Device,
+        vs_mod: &wgpu::ShaderModule,
+        fs_mod: &wgpu::ShaderModule,
+        uniform_textures: Option<&Vec<&wgpu::Texture>>,
+        sampler: Option<&wgpu::Sampler>,
+        uniform_buffer: Option<&wgpu::Buffer>,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        println!("creating bind group");
+
+        let mut bind_group_layout_builder = wgpu::BindGroupLayoutBuilder::new();
+        let mut bind_group_builder = wgpu::BindGroupBuilder::new();
+
+        let texture_views = match uniform_textures {
+            Some(textures) => Some(
+                textures
+                    .iter()
+                    .map(|t| t.view().build())
+                    .collect::<Vec<wgpu::TextureView>>(),
+            ),
+            None => None,
+        };
+
+        if let Some(textures) = uniform_textures {
+            for t in textures.iter() {
+                bind_group_layout_builder = bind_group_layout_builder.sampled_texture(
+                    wgpu::ShaderStage::FRAGMENT,
+                    true,
+                    wgpu::TextureViewDimension::D2,
+                    t.component_type(),
+                )
+            }
+
+            if let Some(views) = texture_views.as_ref() {
+                for v in views {
+                    bind_group_builder = bind_group_builder.texture_view(v);
+                }
+            }
+        }
+
+        if let Some(ref s) = sampler {
+            bind_group_layout_builder =
+                bind_group_layout_builder.sampler(wgpu::ShaderStage::FRAGMENT);
+
+            bind_group_builder = bind_group_builder.sampler(s);
+        }
+
+        if let Some(ref buffer) = uniform_buffer {
+            bind_group_layout_builder =
+                bind_group_layout_builder.uniform_buffer(wgpu::ShaderStage::FRAGMENT, false);
+
+            bind_group_builder = bind_group_builder.buffer::<Uniforms>(buffer, 0..1);
+        }
+
+        let bind_group_layout = bind_group_layout_builder.build(device);
+        let bind_group = bind_group_builder.build(device, &bind_group_layout);
+
+        println!("creating pipeline layout");
+        let pipeline_layout = create_pipeline_layout(device, &bind_group_layout);
+
+        println!("creating render pipeline");
+        let render_pipeline = create_render_pipeline(device, &pipeline_layout, &vs_mod, &fs_mod, 1);
+
+        let output_texture = create_app_texture(&device, width, height, 1);
+
+        Self {
+            bind_group,
+            render_pipeline,
+            output_texture,
+        }
+    }
+
+    pub fn render(&self, encoder: &mut wgpu::CommandEncoder, vertex_buffer: &wgpu::Buffer) {
+        let texture_view = self.output_texture.view().build();
+        let mut render_pass = wgpu::RenderPassBuilder::new()
+            .color_attachment(&texture_view, |color| color)
+            .begin(encoder);
+        render_pass.set_bind_group(0, &self.bind_group, &[]);
+        render_pass.set_pipeline(&self.render_pipeline);
+        render_pass.set_vertex_buffer(0, vertex_buffer, 0, 0);
+        let vertex_range = 0..VERTICES.len() as u32;
+        let instance_range = 0..1;
+        render_pass.draw(vertex_range, instance_range);
+    }
+}
+
 fn create_app_texture(
     device: &wgpu::Device,
     width: u32,
@@ -285,37 +375,6 @@ fn create_texture_reshaper(
     )
 }
 
-fn create_bind_group_layout(
-    device: &wgpu::Device,
-    texture_component_type: wgpu::TextureComponentType,
-) -> wgpu::BindGroupLayout {
-    let uniform_dynamic = false;
-    wgpu::BindGroupLayoutBuilder::new()
-        .sampled_texture(
-            wgpu::ShaderStage::FRAGMENT,
-            true,
-            wgpu::TextureViewDimension::D2,
-            texture_component_type,
-        )
-        .sampler(wgpu::ShaderStage::FRAGMENT)
-        .uniform_buffer(wgpu::ShaderStage::FRAGMENT, uniform_dynamic)
-        .build(device)
-}
-
-fn create_bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    texture: &wgpu::TextureView,
-    sampler: &wgpu::Sampler,
-    uniform_buffer: &wgpu::Buffer,
-) -> wgpu::BindGroup {
-    wgpu::BindGroupBuilder::new()
-        .texture_view(texture)
-        .sampler(sampler)
-        .buffer::<Uniforms>(uniform_buffer, 0..1)
-        .build(device, layout)
-}
-
 fn create_pipeline_layout(
     device: &wgpu::Device,
     bind_group_layout: &wgpu::BindGroupLayout,
@@ -342,11 +401,12 @@ fn create_render_pipeline(
         .build(device)
 }
 
-// See the `nannou::wgpu::bytes` documentation for why this is necessary.
+/// See the `nannou::wgpu::bytes` documentation for why this is necessary.
 fn vertices_as_bytes(data: &[Vertex]) -> &[u8] {
     unsafe { wgpu::bytes::from_slice(data) }
 }
 
+/// Copies the contents of a texture from one to another
 pub fn copy_texture(encoder: &mut wgpu::CommandEncoder, src: &wgpu::Texture, dst: &wgpu::Texture) {
     let src_copy_view = src.default_copy_view();
     let dst_copy_view = dst.default_copy_view();
@@ -354,13 +414,14 @@ pub fn copy_texture(encoder: &mut wgpu::CommandEncoder, src: &wgpu::Texture, dst
     encoder.copy_texture_to_texture(src_copy_view, dst_copy_view, copy_size);
 }
 
-// The directory where we'll save the frames.
+/// Returns the directory to save captured frames.
 fn capture_directory(app: &App) -> std::path::PathBuf {
     app.project_path()
         .expect("could not locate project_path")
         .join("frames")
 }
 
+/// Compiles a shader from the shaders directory
 fn compile_shader(
     app: &App,
     device: &wgpu::Device,
@@ -384,6 +445,7 @@ fn compile_shader(
     wgpu::shader_from_spirv_bytes(device, spirv.as_binary_u8())
 }
 
+/// writes an image to a textue using a custom shader and render pipeline
 fn copy_image_to_texture(
     app: &App,
     window: &Window,
@@ -393,9 +455,11 @@ fn copy_image_to_texture(
     sample_count: u32,
     vertex_buffer: &wgpu::Buffer,
 ) {
+    // load and compile shaders
     let vs_mod = compile_shader(app, &device, "shader.vert", shaderc::ShaderKind::Vertex);
     let fs_mod = compile_shader(app, &device, "image.frag", shaderc::ShaderKind::Fragment);
 
+    // prepare textures
     let image_texture = wgpu::Texture::from_image(window, &image);
     let image_texture_view = image_texture.view().build();
     let texture_view = texture.view().build();
@@ -424,13 +488,13 @@ fn copy_image_to_texture(
     let render_pipeline =
         create_render_pipeline(device, &pipeline_layout, &vs_mod, &fs_mod, sample_count);
 
-    // copy image texture into uniform texture
     println!("copying image texture into uniform texture");
     let ce_desc = wgpu::CommandEncoderDescriptor {
         label: Some("texture-renderer"),
     };
     let mut encoder = device.create_command_encoder(&ce_desc);
 
+    // do the render pass
     {
         let mut render_pass = wgpu::RenderPassBuilder::new()
             .color_attachment(&texture_view, |color| color)

@@ -3,17 +3,16 @@
 layout(location = 0) in vec2 tex_coords;
 layout(location = 0) out vec4 f_color;
 
-layout(set = 0, binding = 0) uniform texture2D frame;
-layout(set = 0, binding = 1) uniform texture2D field;
-layout(set = 0, binding = 2) uniform sampler tex_sampler;
-layout(set = 0, binding = 3) uniform Uniforms {
+layout(set = 0, binding = 0) uniform texture2D tex;
+layout(set = 0, binding = 1) uniform sampler tex_sampler;
+layout(set = 0, binding = 2) uniform Uniforms {
     uint iteration;
     float width;
     float height;
 };
 
 void main() {
-    vec3 color = texture(sampler2D(frame, tex_sampler), tex_coords).rgb;
+    vec3 color = texture(sampler2D(tex, tex_sampler), tex_coords).rgb;
     float color_val = (color.r + color.g + color.b) / 3.0;
 
     int iteration_parity = int(iteration % 2);
@@ -22,7 +21,7 @@ void main() {
     int a = (pixel_x_parity * 2 - 1) * (iteration_parity * 2 - 1);
 
     vec2 other_tex_coords = clamp(tex_coords + vec2(a / width, 0.0), vec2(0.0), vec2(1.0));
-    vec3 other_color = texture(sampler2D(frame, tex_sampler), other_tex_coords).rgb;
+    vec3 other_color = texture(sampler2D(tex, tex_sampler), other_tex_coords).rgb;
     float other_color_val = (other_color.r + other_color.g + other_color.b) / 3.0;
 
     float threshold = 0.05;

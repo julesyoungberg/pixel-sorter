@@ -1,8 +1,9 @@
 use glsl_layout::float;
 use glsl_layout::*;
-use nannou::image;
 use nannou::image::GenericImageView;
+use nannou::image::{self, DynamicImage};
 use nannou::prelude::*;
+use std::fs;
 
 struct Model {
     width: u32,
@@ -71,12 +72,11 @@ fn model(app: &App) -> Model {
 
     // Create the compute shader module.
     println!("loading shaders");
-    let vs_mod = wgpu::shader_from_spirv_bytes(device, include_bytes!("shaders/vert.spv"));
-    let fs_mod = wgpu::shader_from_spirv_bytes(device, include_bytes!("shaders/frag.spv"));
+    let vs_mod = compile_shader(app, &device, "shader.vert", shaderc::ShaderKind::Vertex);
+    let fs_mod = compile_shader(app, &device, "sort.frag", shaderc::ShaderKind::Fragment);
 
     println!("creating uniform texture");
-    let image_texture = wgpu::Texture::from_image(&window, &image);
-    let uniform_texture = create_app_texture(&device, width, height, sample_count);
+    let uniform_texture = create_app_texture(&device, width, height, 1);
     let uniform_texture_view = uniform_texture.view().build();
 
     // Create the sampler for sampling from the source texture.
@@ -94,8 +94,8 @@ fn model(app: &App) -> Model {
 
     // create our custom texture for rendering
     println!("creating app texure and reshaper");
-    let app_texture = create_app_texture(&device, width, height, sample_count);
-    let texture_reshaper = create_texture_reshaper(&device, &app_texture, sample_count);
+    let app_texture = create_app_texture(&device, width, height, 1);
+    let texture_reshaper = create_texture_reshaper(&device, &app_texture, 1, sample_count);
 
     println!("creating bind group layout");
     let bind_group_layout = create_bind_group_layout(device, uniform_texture_view.component_type());
@@ -110,8 +110,7 @@ fn model(app: &App) -> Model {
     println!("creating pipeline layout");
     let pipeline_layout = create_pipeline_layout(device, &bind_group_layout);
     println!("creating render pipeline");
-    let render_pipeline =
-        create_render_pipeline(device, &pipeline_layout, &vs_mod, &fs_mod, sample_count);
+    let render_pipeline = create_render_pipeline(device, &pipeline_layout, &vs_mod, &fs_mod, 1);
 
     println!("creating vertex buffer");
     let vertices_bytes = vertices_as_bytes(&VERTICES[..]);
@@ -127,23 +126,17 @@ fn model(app: &App) -> Model {
     println!("creating texture capturer");
     let texture_capturer = wgpu::TextureCapturer::default();
 
-    println!("creating init texture reshaper");
-    let init_texture_reshaper = wgpu::TextureReshaper::new(
-        device,
-        &image_texture.view().build(),
+    copy_image_to_texture(
+        app,
+        &window,
+        &device,
+        &image,
+        &uniform_texture,
         1,
-        uniform_texture.component_type(),
-        sample_count,
-        Frame::TEXTURE_FORMAT,
+        &vertex_buffer,
     );
 
-    // copy image texture into uniform texture
-    println!("copying image texture into uniform texture");
-    let ce_desc = wgpu::CommandEncoderDescriptor {
-        label: Some("texture-renderer"),
-    };
-    let mut encoder = device.create_command_encoder(&ce_desc);
-    init_texture_reshaper.encode_render_pass(&uniform_texture_view, &mut encoder);
+    std::fs::create_dir_all(&capture_directory(app)).unwrap();
 
     Model {
         width,
@@ -187,6 +180,15 @@ fn update(app: &App, model: &mut Model, _update: Update) {
         uniforms_size as u64,
     );
 
+    // Take a snapshot of the texture. The capturer will do the following:
+    //
+    // 1. Resolve the texture to a non-multisampled texture if necessary.
+    // 2. Convert the format to non-linear 8-bit sRGBA ready for image storage.
+    // 3. Copy the result to a buffer ready to be mapped for reading.
+    let snapshot = model
+        .texture_capturer
+        .capture(device, &mut encoder, &model.uniform_texture);
+
     {
         let mut render_pass = wgpu::RenderPassBuilder::new()
             .color_attachment(&texture_view, |color| color)
@@ -202,15 +204,6 @@ fn update(app: &App, model: &mut Model, _update: Update) {
     // copy app texture to uniform texture
     copy_texture(&mut encoder, &model.app_texture, &model.uniform_texture);
 
-    // Take a snapshot of the texture. The capturer will do the following:
-    //
-    // 1. Resolve the texture to a non-multisampled texture if necessary.
-    // 2. Convert the format to non-linear 8-bit sRGBA ready for image storage.
-    // 3. Copy the result to a buffer ready to be mapped for reading.
-    // let snapshot = model
-    //     .texture_capturer
-    //     .capture(device, &mut encoder, &model.uniform_texture);
-
     // submit encoded command buffer
     window.swap_chain_queue().submit(&[encoder.finish()]);
 
@@ -218,21 +211,23 @@ fn update(app: &App, model: &mut Model, _update: Update) {
     //
     // NOTE: It is essential that the commands for capturing the snapshot are `submit`ted before we
     // attempt to read the snapshot - otherwise we will read a blank texture!
-    // let elapsed_frames = app.main_window().elapsed_frames();
-    // let path = capture_directory(app)
-    //     .join(elapsed_frames.to_string())
-    //     .with_extension("png");
-    // snapshot
-    //     .read(move |result| {
-    //         let image = result.expect("failed to map texture memory");
-    //         image
-    //             .save(&path)
-    //             .expect("failed to save texture to png image");
-    //     })
-    //     .unwrap();
+    let elapsed_frames = app.main_window().elapsed_frames();
+    let path = capture_directory(app)
+        .join(elapsed_frames.to_string())
+        .with_extension("png");
+    snapshot
+        .read(move |result| {
+            let image = result.expect("failed to map texture memory");
+            image
+                .save(&path)
+                .expect("failed to save texture to png image");
+        })
+        .unwrap();
+
+    // std::thread::sleep(std::time::Duration::from_secs(1));
 }
 
-fn view(app: &App, model: &Model, frame: Frame) {
+fn view(_app: &App, model: &Model, frame: Frame) {
     // Sample the texture and write it to the frame.
     let mut encoder = frame.command_encoder();
     model
@@ -274,7 +269,8 @@ fn create_app_texture(
 fn create_texture_reshaper(
     device: &wgpu::Device,
     texture: &wgpu::Texture,
-    msaa_samples: u32,
+    src_sample_count: u32,
+    dst_sample_count: u32,
 ) -> wgpu::TextureReshaper {
     let texture_view = texture.view().build();
     let texture_component_type = texture.component_type();
@@ -282,9 +278,9 @@ fn create_texture_reshaper(
     wgpu::TextureReshaper::new(
         device,
         &texture_view,
-        msaa_samples,
+        src_sample_count,
         texture_component_type,
-        msaa_samples,
+        dst_sample_count,
         dst_format,
     )
 }
@@ -293,8 +289,6 @@ fn create_bind_group_layout(
     device: &wgpu::Device,
     texture_component_type: wgpu::TextureComponentType,
 ) -> wgpu::BindGroupLayout {
-    let storage_dynamic = false;
-    let storage_readonly = false;
     let uniform_dynamic = false;
     wgpu::BindGroupLayoutBuilder::new()
         .sampled_texture(
@@ -365,4 +359,89 @@ fn capture_directory(app: &App) -> std::path::PathBuf {
     app.project_path()
         .expect("could not locate project_path")
         .join("frames")
+}
+
+fn compile_shader(
+    app: &App,
+    device: &wgpu::Device,
+    filename: &str,
+    kind: shaderc::ShaderKind,
+) -> wgpu::ShaderModule {
+    let path = app
+        .project_path()
+        .unwrap()
+        .join("src")
+        .join("shaders")
+        .join(filename)
+        .into_os_string()
+        .into_string()
+        .unwrap();
+    let code = fs::read_to_string(path).unwrap();
+    let mut compiler = shaderc::Compiler::new().unwrap();
+    let spirv = compiler
+        .compile_into_spirv(code.as_str(), kind, filename, "main", None)
+        .unwrap();
+    wgpu::shader_from_spirv_bytes(device, spirv.as_binary_u8())
+}
+
+fn copy_image_to_texture(
+    app: &App,
+    window: &Window,
+    device: &wgpu::Device,
+    image: &DynamicImage,
+    texture: &wgpu::Texture,
+    sample_count: u32,
+    vertex_buffer: &wgpu::Buffer,
+) {
+    let vs_mod = compile_shader(app, &device, "shader.vert", shaderc::ShaderKind::Vertex);
+    let fs_mod = compile_shader(app, &device, "image.frag", shaderc::ShaderKind::Fragment);
+
+    let image_texture = wgpu::Texture::from_image(window, &image);
+    let image_texture_view = image_texture.view().build();
+    let texture_view = texture.view().build();
+    let sampler = wgpu::SamplerBuilder::new().build(device);
+
+    let bind_group_layout = wgpu::BindGroupLayoutBuilder::new()
+        .sampled_texture(
+            wgpu::ShaderStage::FRAGMENT,
+            true,
+            wgpu::TextureViewDimension::D2,
+            image_texture.component_type(),
+        )
+        .sampler(wgpu::ShaderStage::FRAGMENT)
+        .build(device);
+
+    let bind_group = wgpu::BindGroupBuilder::new()
+        .texture_view(&image_texture_view)
+        .sampler(&sampler)
+        .build(device, &bind_group_layout);
+
+    let pipeline_desc = wgpu::PipelineLayoutDescriptor {
+        bind_group_layouts: &[&bind_group_layout],
+    };
+    let pipeline_layout = device.create_pipeline_layout(&pipeline_desc);
+
+    let render_pipeline =
+        create_render_pipeline(device, &pipeline_layout, &vs_mod, &fs_mod, sample_count);
+
+    // copy image texture into uniform texture
+    println!("copying image texture into uniform texture");
+    let ce_desc = wgpu::CommandEncoderDescriptor {
+        label: Some("texture-renderer"),
+    };
+    let mut encoder = device.create_command_encoder(&ce_desc);
+
+    {
+        let mut render_pass = wgpu::RenderPassBuilder::new()
+            .color_attachment(&texture_view, |color| color)
+            .begin(&mut encoder);
+        render_pass.set_bind_group(0, &bind_group, &[]);
+        render_pass.set_pipeline(&render_pipeline);
+        render_pass.set_vertex_buffer(0, &vertex_buffer, 0, 0);
+        let vertex_range = 0..VERTICES.len() as u32;
+        let instance_range = 0..1;
+        render_pass.draw(vertex_range, instance_range);
+    }
+
+    window.swap_chain_queue().submit(&[encoder.finish()]);
 }

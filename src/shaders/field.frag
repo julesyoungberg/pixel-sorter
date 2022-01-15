@@ -112,6 +112,39 @@ vec3 diagonals(float direction) {
     return vec3(0);
 }
 
+vec3 vertical_diagonal(float direction) {
+    vec2 st = tex_coords;
+
+    int iteration_parity = int(iteration % 2);
+    int pixel_parity = int(floor(tex_coords.y * height)) % 2;
+
+    int a = (pixel_parity * 2 - 1) * (iteration_parity * 2 - 1);
+
+    return vec3(a, a, direction);
+}
+
+vec3 vertical_inverse(float direction) {
+    vec2 st = tex_coords;
+
+    int iteration_parity = int(iteration % 2);
+    int pixel_parity = int(floor(tex_coords.y * height)) % 2;
+
+    int a = (pixel_parity * 2 - 1) * (iteration_parity * 2 - 1);
+
+    return vec3(a, a * -1.0, direction);
+}
+
+vec3 zig_zag() {
+    vec2 st = tex_coords;
+    int y_parity = int(floor(st.y * 5.0)) % 2;
+    
+    if (y_parity > 0) {
+        return vertical_inverse(1.0);
+    }
+
+    return vertical_diagonal(-1.0);
+}
+
 void main() {
     vec3 color = vec3(0);
 
@@ -119,7 +152,9 @@ void main() {
     // color = vertical(-1.0);
     // color = diagonal(1.0);
     // color = mirror_diagonal(1.001);
-    color = diagonals(1.001);
+    // color = diagonals(1.001);
+    // color = vertical_inverse(1.0);
+    color = zig_zag();
 
     f_color = vec4(color, 1.0);
 }

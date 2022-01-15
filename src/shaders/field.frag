@@ -124,16 +124,16 @@ vec3 vertical_inverse(float direction) {
     return vec3(a, a * -1.0, direction);
 }
 
-vec3 zig_zag() {
+vec3 zig_zag(float direction) {
     float grid = 6.0;
     int y_parity = int(floor(tex_coords.y * grid)) % 2;
     
     if (y_parity > 0) {
-        // return vertical_inverse(1.0);
-        return vertical_inverse(1.0);
+        return vertical_inverse(1.0 * direction);
     }
 
-    return vertical_diagonal(-1.0);
+    // return vertical_inverse(-1.0 * direction);
+    return vertical_diagonal(-1.0 * direction);
 }
 
 void main() {
@@ -145,7 +145,7 @@ void main() {
     // color = mirror_diagonal(1.001);
     // color = diagonals(1.001);
     // color = vertical_inverse(1.0);
-    color = zig_zag();
+    color = zig_zag(1.0);
 
     f_color = vec4(color, 1.0);
 }

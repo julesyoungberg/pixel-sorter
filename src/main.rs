@@ -174,7 +174,8 @@ fn update(app: &App, model: &mut Model, _update: Update) {
 
     model.frame_capturer.save_frame(app);
 
-    // std::thread::sleep(std::time::Duration::from_secs(1));
+    // slow it down just a bit
+    // std::thread::sleep(std::time::Duration::from_millis(50));
 }
 
 fn view(_app: &App, model: &Model, frame: Frame) {

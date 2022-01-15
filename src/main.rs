@@ -38,9 +38,10 @@ fn main() {
 
 fn model(app: &App) -> Model {
     // Load the image.
-    let image_path = app.assets_path().unwrap().join("vqgan_graffiti.png");
+    let image_path = app.assets_path().unwrap().join("industrial.jpeg");
     let image = image::open(image_path).unwrap();
     let (width, height) = image.dimensions();
+    let scale = 1;
 
     let window_id = app
         .new_window()
@@ -52,19 +53,26 @@ fn model(app: &App) -> Model {
     let device = window.swap_chain_device();
     let sample_count = window.msaa_samples();
 
+    println!("image dimensions: {}, {}", width, height);
+
+    let swidth = width / scale;
+    let sheight = height / scale;
+
+    println!("scaled dimensions: {}, {}", swidth, sheight);
+
     // Create the compute shader module.
     println!("loading shaders");
     let vs_mod = compile_shader(app, &device, "shader.vert", shaderc::ShaderKind::Vertex);
     let field_fs_mod = compile_shader(app, &device, "field.frag", shaderc::ShaderKind::Fragment);
     let sort_fs_mod = compile_shader(app, &device, "sort.frag", shaderc::ShaderKind::Fragment);
 
-    let uniform_texture = render::create_app_texture(&device, width, height, 1);
+    let uniform_texture = render::create_app_texture(&device, swidth, sheight, 1);
 
     // Create the sampler for sampling from the source texture.
     let sampler = wgpu::SamplerBuilder::new().build(device);
 
     // create uniform buffer
-    let uniforms = create_uniforms(width, height, 0);
+    let uniforms = create_uniforms(swidth, sheight, 0);
     println!("uniforms: {:?}", uniforms);
     let uniforms_bytes = uniforms_as_bytes(&uniforms);
     let uniform_buffer = device.create_buffer_with_data(
@@ -79,8 +87,8 @@ fn model(app: &App) -> Model {
         None,
         None,
         Some(&uniform_buffer),
-        width,
-        height,
+        swidth,
+        sheight,
         sample_count,
     );
 
@@ -93,8 +101,8 @@ fn model(app: &App) -> Model {
         Some(&sorter_uniform_textures),
         Some(&sampler),
         Some(&uniform_buffer),
-        width,
-        height,
+        swidth,
+        sheight,
         sample_count,
     );
 
@@ -175,7 +183,7 @@ fn update(app: &App, model: &mut Model, _update: Update) {
     model.frame_capturer.save_frame(app);
 
     // slow it down just a bit
-    // std::thread::sleep(std::time::Duration::from_millis(50));
+    std::thread::sleep(std::time::Duration::from_millis(50));
 }
 
 fn view(_app: &App, model: &Model, frame: Frame) {

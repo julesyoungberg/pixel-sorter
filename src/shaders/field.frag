@@ -38,8 +38,6 @@ layout(set = 0, binding = 0) uniform Uniforms {
 */
 
 vec3 horizontal(float direction) {
-    vec2 st = tex_coords;
-
     int iteration_parity = int(iteration % 2);
     int pixel_parity = int(floor(tex_coords.x * width)) % 2;
 
@@ -49,8 +47,6 @@ vec3 horizontal(float direction) {
 }
 
 vec3 vertical(float direction) {
-    vec2 st = tex_coords;
-
     int iteration_parity = int(iteration % 2);
     int pixel_parity = int(floor(tex_coords.y * height)) % 2;
 
@@ -60,8 +56,6 @@ vec3 vertical(float direction) {
 }
 
 vec3 diagonal(float direction) {
-    vec2 st = tex_coords;
-
     int iteration_parity = int(iteration % 2);
     int pixel_parity = int(floor(tex_coords.x * width)) % 2;
 
@@ -113,8 +107,6 @@ vec3 diagonals(float direction) {
 }
 
 vec3 vertical_diagonal(float direction) {
-    vec2 st = tex_coords;
-
     int iteration_parity = int(iteration % 2);
     int pixel_parity = int(floor(tex_coords.y * height)) % 2;
 
@@ -124,8 +116,6 @@ vec3 vertical_diagonal(float direction) {
 }
 
 vec3 vertical_inverse(float direction) {
-    vec2 st = tex_coords;
-
     int iteration_parity = int(iteration % 2);
     int pixel_parity = int(floor(tex_coords.y * height)) % 2;
 
@@ -135,10 +125,11 @@ vec3 vertical_inverse(float direction) {
 }
 
 vec3 zig_zag() {
-    vec2 st = tex_coords;
-    int y_parity = int(floor(st.y * 5.0)) % 2;
+    float grid = 6.0;
+    int y_parity = int(floor(tex_coords.y * grid)) % 2;
     
     if (y_parity > 0) {
+        // return vertical_inverse(1.0);
         return vertical_inverse(1.0);
     }
 

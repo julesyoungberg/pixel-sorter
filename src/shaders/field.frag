@@ -125,7 +125,7 @@ vec3 vertical_inverse(float direction) {
 }
 
 vec3 zig_zag(float direction) {
-    float grid = 6.0;
+    float grid = 5.0;
     int y_parity = int(floor(tex_coords.y * grid)) % 2;
     
     if (y_parity > 0) {
@@ -141,11 +141,11 @@ void main() {
 
     // color = horizontal(1.0);
     // color = vertical(-1.0);
-    // color = diagonal(1.0);
+    // color = diagonal(-1.01);
     // color = mirror_diagonal(1.001);
     // color = diagonals(1.001);
     // color = vertical_inverse(1.0);
-    color = zig_zag(1.0);
+    color = zig_zag(1.001);
 
     f_color = vec4(color, 1.0);
 }

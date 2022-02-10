@@ -38,7 +38,7 @@ fn main() {
 
 fn model(app: &App) -> Model {
     // Load the image.
-    let image_path = app.assets_path().unwrap().join("industial.jpeg");
+    let image_path = app.assets_path().unwrap().join("neon-city.jpeg");
     let image = image::open(image_path).unwrap();
     let (width, height) = image.dimensions();
     let scale = 1;

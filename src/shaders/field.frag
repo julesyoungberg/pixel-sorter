@@ -141,11 +141,11 @@ void main() {
 
     // color = horizontal(1.0);
     // color = vertical(-1.0);
-    // color = diagonal(-1.01);
+    color = diagonal(-1.01);
     // color = mirror_diagonal(1.001);
     // color = diagonals(1.001);
     // color = vertical_inverse(1.0);
-    color = zig_zag(1.001);
+    // color = zig_zag(1.001);
 
     f_color = vec4(color, 1.0);
 }

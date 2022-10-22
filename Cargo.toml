@@ -7,5 +7,5 @@ edition = "2021"
 
 [dependencies]
 glsl-layout = "0.4.0"
-nannou = "0.15.0"
+nannou = "0.17"
 shaderc = "0.6"

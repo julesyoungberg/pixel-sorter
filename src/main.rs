@@ -22,6 +22,7 @@ struct Model {
     sorter: CustomRenderer,
     vertex_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
+    texture_reshaper: wgpu::TextureReshaper,
 }
 
 #[repr(C)]
@@ -38,7 +39,7 @@ fn main() {
 
 fn model(app: &App) -> Model {
     // Load the image.
-    let image_path = app.assets_path().unwrap().join("neon-city.jpeg");
+    let image_path = app.assets_path().unwrap().join("sloth10.png");
     let image = image::open(image_path).unwrap();
     let (width, height) = image.dimensions();
     let scale = 1;
@@ -75,10 +76,11 @@ fn model(app: &App) -> Model {
     let uniforms = create_uniforms(swidth, sheight, 0);
     println!("uniforms: {:?}", uniforms);
     let uniforms_bytes = uniforms_as_bytes(&uniforms);
-    let uniform_buffer = device.create_buffer_with_data(
-        uniforms_bytes,
-        wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
-    );
+    let uniform_buffer = device.create_buffer_init(&wgpu::BufferInitDescriptor {
+        label: None,
+        contents: uniforms_bytes,
+        usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+    });
 
     let field_generator = CustomRenderer::new::<Uniforms>(
         &device,
@@ -108,7 +110,11 @@ fn model(app: &App) -> Model {
 
     println!("creating vertex buffer");
     let vertices_bytes = vertices_as_bytes(&VERTICES[..]);
-    let vertex_buffer = device.create_buffer_with_data(vertices_bytes, wgpu::BufferUsage::VERTEX);
+    let vertex_buffer = device.create_buffer_init(&wgpu::BufferInitDescriptor {
+        label: None,
+        contents: vertices_bytes,
+        usage: wgpu::BufferUsage::VERTEX,
+    });
 
     copy_image_to_texture(
         app,
@@ -122,6 +128,8 @@ fn model(app: &App) -> Model {
 
     let frame_capturer = FrameCapturer::new(app);
 
+    let texture_reshaper = create_texture_reshaper(&device, &sorter.output_texture, sample_count);
+
     Model {
         width,
         height,
@@ -131,6 +139,7 @@ fn model(app: &App) -> Model {
         sorter,
         vertex_buffer,
         uniform_buffer,
+        texture_reshaper,
     }
 }
 
@@ -143,8 +152,11 @@ fn update(app: &App, model: &mut Model, _update: Update) {
     let uniforms = create_uniforms(model.width, model.height, elapsed_frames as u32 % 2);
     let uniforms_bytes = uniforms_as_bytes(&uniforms);
     let uniforms_size = uniforms_bytes.len();
-    let new_uniform_buffer =
-        device.create_buffer_with_data(uniforms_bytes, wgpu::BufferUsage::COPY_SRC);
+    let new_uniform_buffer = device.create_buffer_init(&BufferInitDescriptor {
+        label: None,
+        contents: uniforms_bytes,
+        usage: wgpu::BufferUsage::COPY_SRC,
+    });
 
     // The encoder we'll use to encode the render pass
     let desc = wgpu::CommandEncoderDescriptor {
@@ -171,14 +183,10 @@ fn update(app: &App, model: &mut Model, _update: Update) {
     model.sorter.render(&mut encoder, &model.vertex_buffer);
 
     // copy app texture to uniform texture
-    copy_texture(
-        &mut encoder,
-        &model.sorter.output_texture,
-        &model.uniform_texture,
-    );
+    model.texture_reshaper.encode_render_pass(&model.uniform_texture.view().build(), &mut encoder);
 
     // submit encoded command buffer
-    window.swap_chain_queue().submit(&[encoder.finish()]);
+    window.swap_chain_queue().submit([encoder.finish()]);
 
     model.frame_capturer.save_frame(app);
 
@@ -211,14 +219,6 @@ fn uniforms_as_bytes(uniforms: &Uniforms) -> &[u8] {
 /// See the `nannou::wgpu::bytes` documentation for why this is necessary.
 fn vertices_as_bytes(data: &[Vertex]) -> &[u8] {
     unsafe { wgpu::bytes::from_slice(data) }
-}
-
-/// Copies the contents of a texture from one to another
-pub fn copy_texture(encoder: &mut wgpu::CommandEncoder, src: &wgpu::Texture, dst: &wgpu::Texture) {
-    let src_copy_view = src.default_copy_view();
-    let dst_copy_view = dst.default_copy_view();
-    let copy_size = dst.extent();
-    encoder.copy_texture_to_texture(src_copy_view, dst_copy_view, copy_size);
 }
 
 /// Compiles a shader from the shaders directory
@@ -266,13 +266,13 @@ fn copy_image_to_texture(
     let sampler = wgpu::SamplerBuilder::new().build(device);
 
     let bind_group_layout = wgpu::BindGroupLayoutBuilder::new()
-        .sampled_texture(
+        .texture(
             wgpu::ShaderStage::FRAGMENT,
             true,
             wgpu::TextureViewDimension::D2,
-            image_texture.component_type(),
+            image_texture.sample_type(),
         )
-        .sampler(wgpu::ShaderStage::FRAGMENT)
+        .sampler(wgpu::ShaderStage::FRAGMENT, false)
         .build(device);
 
     let bind_group = wgpu::BindGroupBuilder::new()
@@ -281,7 +281,9 @@ fn copy_image_to_texture(
         .build(device, &bind_group_layout);
 
     let pipeline_desc = wgpu::PipelineLayoutDescriptor {
+        label: None,
         bind_group_layouts: &[&bind_group_layout],
+        push_constant_ranges: &[],
     };
     let pipeline_layout = device.create_pipeline_layout(&pipeline_desc);
 
@@ -301,11 +303,29 @@ fn copy_image_to_texture(
             .begin(&mut encoder);
         render_pass.set_bind_group(0, &bind_group, &[]);
         render_pass.set_pipeline(&render_pipeline);
-        render_pass.set_vertex_buffer(0, &vertex_buffer, 0, 0);
+        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
         let vertex_range = 0..VERTICES.len() as u32;
         let instance_range = 0..1;
         render_pass.draw(vertex_range, instance_range);
     }
 
-    window.swap_chain_queue().submit(&[encoder.finish()]);
+    window.swap_chain_queue().submit([encoder.finish()]);
+}
+
+fn create_texture_reshaper(
+    device: &wgpu::Device,
+    texture: &wgpu::Texture,
+    msaa_samples: u32,
+) -> wgpu::TextureReshaper {
+    let texture_view = texture.view().build();
+    let texture_sample_type = texture.sample_type();
+    let dst_format = Frame::TEXTURE_FORMAT;
+    wgpu::TextureReshaper::new(
+        device,
+        &texture_view,
+        msaa_samples,
+        texture_sample_type,
+        msaa_samples,
+        dst_format,
+    )
 }

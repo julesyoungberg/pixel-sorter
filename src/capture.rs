@@ -2,7 +2,7 @@ use nannou::{prelude::*, wgpu};
 
 pub struct FrameCapturer {
     texture_capturer: wgpu::TextureCapturer,
-    snapshot: Option<wgpu::Textue5cfe74reSnapshot>,
+    snapshot: Option<wgpu::TextueSnapshot>,
 }
 
 impl FrameCapturer {

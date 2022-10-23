@@ -39,7 +39,7 @@ fn main() {
 
 fn model(app: &App) -> Model {
     // Load the image.
-    let image_path = app.assets_path().unwrap().join("sloth10.png");
+    let image_path = app.assets_path().unwrap().join("winnie22.png");
     let image = image::open(image_path).unwrap();
     let (width, height) = image.dimensions();
     let scale = 1;
@@ -51,7 +51,7 @@ fn model(app: &App) -> Model {
         .build()
         .unwrap();
     let window = app.window(window_id).unwrap();
-    let device = window.swap_chain_device();
+    let device = window.device();
     let sample_count = window.msaa_samples();
 
     println!("image dimensions: {}, {}", width, height);
@@ -79,7 +79,7 @@ fn model(app: &App) -> Model {
     let uniform_buffer = device.create_buffer_init(&wgpu::BufferInitDescriptor {
         label: None,
         contents: uniforms_bytes,
-        usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
 
     let field_generator = CustomRenderer::new::<Uniforms>(
@@ -113,7 +113,7 @@ fn model(app: &App) -> Model {
     let vertex_buffer = device.create_buffer_init(&wgpu::BufferInitDescriptor {
         label: None,
         contents: vertices_bytes,
-        usage: wgpu::BufferUsage::VERTEX,
+        usage: wgpu::BufferUsages::VERTEX,
     });
 
     copy_image_to_texture(
@@ -128,7 +128,7 @@ fn model(app: &App) -> Model {
 
     let frame_capturer = FrameCapturer::new(app);
 
-    let texture_reshaper = create_texture_reshaper(&device, &sorter.output_texture, sample_count);
+    let texture_reshaper = create_texture_reshaper(&device, &sorter.output_texture, 1, 1);
 
     Model {
         width,
@@ -145,7 +145,7 @@ fn model(app: &App) -> Model {
 
 fn update(app: &App, model: &mut Model, _update: Update) {
     let window = app.main_window();
-    let device = window.swap_chain_device();
+    let device = window.device();
 
     // An update for the uniform buffer with the current time.
     let elapsed_frames = app.main_window().elapsed_frames();
@@ -155,7 +155,7 @@ fn update(app: &App, model: &mut Model, _update: Update) {
     let new_uniform_buffer = device.create_buffer_init(&BufferInitDescriptor {
         label: None,
         contents: uniforms_bytes,
-        usage: wgpu::BufferUsage::COPY_SRC,
+        usage: wgpu::BufferUsages::COPY_SRC,
     });
 
     // The encoder we'll use to encode the render pass
@@ -186,7 +186,7 @@ fn update(app: &App, model: &mut Model, _update: Update) {
     model.texture_reshaper.encode_render_pass(&model.uniform_texture.view().build(), &mut encoder);
 
     // submit encoded command buffer
-    window.swap_chain_queue().submit([encoder.finish()]);
+    window.queue().submit([encoder.finish()]);
 
     model.frame_capturer.save_frame(app);
 
@@ -228,6 +228,7 @@ fn compile_shader(
     filename: &str,
     kind: shaderc::ShaderKind,
 ) -> wgpu::ShaderModule {
+    println!("compiling {:?}", filename);
     let path = app
         .project_path()
         .unwrap()
@@ -267,12 +268,12 @@ fn copy_image_to_texture(
 
     let bind_group_layout = wgpu::BindGroupLayoutBuilder::new()
         .texture(
-            wgpu::ShaderStage::FRAGMENT,
-            true,
+            wgpu::ShaderStages::FRAGMENT,
+            false,
             wgpu::TextureViewDimension::D2,
             image_texture.sample_type(),
         )
-        .sampler(wgpu::ShaderStage::FRAGMENT, false)
+        .sampler(wgpu::ShaderStages::FRAGMENT, true)
         .build(device);
 
     let bind_group = wgpu::BindGroupBuilder::new()
@@ -309,23 +310,5 @@ fn copy_image_to_texture(
         render_pass.draw(vertex_range, instance_range);
     }
 
-    window.swap_chain_queue().submit([encoder.finish()]);
-}
-
-fn create_texture_reshaper(
-    device: &wgpu::Device,
-    texture: &wgpu::Texture,
-    msaa_samples: u32,
-) -> wgpu::TextureReshaper {
-    let texture_view = texture.view().build();
-    let texture_sample_type = texture.sample_type();
-    let dst_format = Frame::TEXTURE_FORMAT;
-    wgpu::TextureReshaper::new(
-        device,
-        &texture_view,
-        msaa_samples,
-        texture_sample_type,
-        msaa_samples,
-        dst_format,
-    )
+    window.queue().submit([encoder.finish()]);
 }

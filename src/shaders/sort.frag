@@ -12,34 +12,15 @@ layout(set = 0, binding = 3) uniform Uniforms {
     float height;
 };
 
-// uses odd-even algorithm instructions from the field to sort the frame 
-void main() {
-    // get the frames pixel color
-    vec3 color = texture(sampler2D(frame, tex_sampler), tex_coords).rgb;
-    float color_val = (color.r + color.g + color.b) / 3.0;
-    
-    // read a vector from the generated field
-    vec3 data = texture(sampler2D(field, tex_sampler), tex_coords).xyz;
-
-    // if directions are zero skip
-    if (data == vec3(0.0)) {
-        f_color = vec4(color, 1.0);
-        return;
-    }
-
-    // extract insructions from the pixel
-    vec2 vector = data.xy;
-    float direction = sign(data.z);
-    float threshold = abs(data.z < 0.0 ? data.z + 1.0 : data.z - 1.0);// fract(data.z);
-    float a = sign(vector.x * 2.0 + vector.y) * 2.0 - 1.0;
-
+vec2 get_other_coords(vec3 data) {
     // get the other pixel's coords
     vec2 resolution = vec2(width, height);
-    vec2 other_tex_coords = clamp(tex_coords + vector / resolution, vec2(0.0), vec2(1.0));
-    if (other_tex_coords == tex_coords) {
-        f_color = vec4(color, 1.0);
-        return;
-    }
+    vec2 other_tex_coords = clamp(tex_coords + data.xy / resolution, vec2(0.0), vec2(1.0));
+    return other_tex_coords;
+}
+
+void get_other_pixel_color(in vec2 other_tex_coords, inout vec3 color, float a, float direction, float threshold) {
+    float color_val = (color.r + color.g + color.b) / 3.0;
 
     // get other pixel color
     vec3 other_color = texture(sampler2D(frame, tex_sampler), other_tex_coords).rgb;
@@ -79,6 +60,34 @@ void main() {
             }
         }
     }
+}
+
+// uses odd-even algorithm instructions from the field to sort the frame 
+void main() {
+    // get the frames pixel color
+    vec3 color = texture(sampler2D(frame, tex_sampler), tex_coords).rgb;
+    
+    // read a vector from the generated field
+    vec3 data = texture(sampler2D(field, tex_sampler), tex_coords).xyz;
+
+    // if directions are zero skip
+    if (data == vec3(0.0)) {
+        f_color = vec4(color, 1.0);
+        return;
+    }
+
+    vec2 other_tex_coords = get_other_coords(data);
+    if (other_tex_coords == tex_coords) {
+        f_color = vec4(color, 1.0);
+        return;
+    }
+
+    // extract insructions from the pixel
+    float a = sign(data.x * 2.0 + data.y) * 2.0 - 1.0;
+    float direction = sign(data.z);
+    float threshold = abs(data.z < 0.0 ? data.z + 1.0 : data.z - 1.0);// fract(data.z);
+
+    get_other_pixel_color(other_tex_coords, color, a, direction, threshold);        
 
     f_color = vec4(color, 1.0);
 }
